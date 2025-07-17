@@ -1,4 +1,11 @@
 // server.js - Enhanced with ML Models and LLM for Invoice Processing
+require('dotenv').config(); // ← This MUST be the very first line
+
+// Debug environment variables immediately after loading
+console.log('🔍 Checking environment variables at startup:');
+console.log('GOOGLE_CLOUD_PROJECT_ID:', process.env.GOOGLE_CLOUD_PROJECT_ID || 'NOT_SET');
+console.log('GOOGLE_DOCUMENT_AI_PROCESSOR_ID:', process.env.GOOGLE_DOCUMENT_AI_PROCESSOR_ID || 'NOT_SET');
+console.log('GOOGLE_APPLICATION_CREDENTIALS:', process.env.GOOGLE_APPLICATION_CREDENTIALS || 'NOT_SET');
 const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
@@ -21,7 +28,7 @@ const crypto = require('crypto');
 const Joi = require('joi');
 const axios = require('axios');
 const { processDocumentPure } = require('./utils/pure-pdf-processor.js');
-require('dotenv').config();
+// Add these imports at the top of your server.js file
 
 const app = express();
 const server = http.createServer(app);
@@ -31,6 +38,23 @@ const io = new Server(server, {
         methods: ["GET", "POST"]
     }
 });
+
+const PORT = process.env.PORT || 5000;
+// Initialize enhanced processor AFTER environment variables are loaded
+let enhancedProcessor;
+
+// Add this function to initialize the processor after server setup
+function initializeEnhancedProcessor() {
+    try {
+        const { EnhancedDocumentProcessor } = require('./utils/enhanced-document-processor');
+        enhancedProcessor = new EnhancedDocumentProcessor();
+        console.log('✅ Enhanced Document Processor initialized successfully');
+    } catch (error) {
+        console.error('❌ Failed to initialize Enhanced Document Processor:', error.message);
+        // Fallback: you can still use basic processing
+    }
+}
+
 
 // Enhanced middleware
 app.use(helmet({
@@ -1044,26 +1068,50 @@ function validateLineItems(items) {
     );
 }
 
+// Replace your existing processDocumentAsyncWithUser function with this:
 async function processDocumentAsyncWithUser(filePath, documentId, socketId, originalName, userId, companyId) {
     try {
-        console.log(`🚀 Starting processing for user ${userId}: ${originalName}`);
+        console.log(`🚀 Starting enhanced processing for user ${userId}: ${originalName}`);
 
         const document = documents.get(documentId);
         if (!document) {
             throw new Error('Document not found in memory');
         }
 
+        // Send initial processing update
         if (socketId) {
             io.to(socketId).emit('processing_update', {
                 documentId,
-                stage: 'preprocessing',
+                stage: 'enhanced_processing',
                 progress: 5,
-                message: 'Starting document processing...'
+                message: 'Starting enhanced document processing...'
             });
         }
 
-        // Use your existing pure PDF processing
-        const result = await processDocumentPure(filePath, documentId, socketId, io);
+        let result;
+
+        // Use enhanced processor if available, otherwise fall back to pure PDF processing
+        if (enhancedProcessor) {
+            try {
+                result = await enhancedProcessor.processDocument(filePath, documentId, socketId, io);
+            } catch (enhancedError) {
+                console.warn('⚠️ Enhanced processing failed, using fallback:', enhancedError.message);
+                result = await processDocumentPure(filePath, documentId, socketId, io);
+                result.extractionMethods = ['Pure PDF.js (Fallback)'];
+                result.metrics = {
+                    ...result.metrics,
+                    method: 'Pure PDF.js (Fallback)'
+                };
+            }
+        } else {
+            console.log('🔄 Using pure PDF processing (enhanced processor not available)');
+            result = await processDocumentPure(filePath, documentId, socketId, io);
+            result.extractionMethods = ['Pure PDF.js'];
+            result.metrics = {
+                ...result.metrics,
+                method: 'Pure PDF.js'
+            };
+        }
 
         // Update document record
         document.status = 'completed';
@@ -1074,8 +1122,16 @@ async function processDocumentAsyncWithUser(filePath, documentId, socketId, orig
         document.extractionMethods = result.extractionMethods;
         document.pageCount = result.metrics?.pagesProcessed || 1;
 
-        console.log(`✅ Processing completed for user ${userId}: ${originalName}`);
+        console.log(`📊 Enhanced Processing Summary for ${originalName}:`);
+        console.log(`   ✅ Method: ${result.metrics?.method || 'Unknown'}`);
+        console.log(`   📊 Confidence: ${result.metrics?.confidence?.toFixed(1) || result.metrics?.averageConfidence?.toFixed(1) || 0}%`);
+        console.log(`   📄 Invoice #: ${document.invoiceData?.invoiceNumber || 'Not found'}`);
+        console.log(`   🏢 Vendor: ${document.invoiceData?.vendor?.name || 'Not found'}`);
+        console.log(`   💰 Total: ${document.invoiceData?.amounts?.currency || ''}${document.invoiceData?.amounts?.total || 'Not found'}`);
+        console.log(`   📦 Line Items: ${document.invoiceData?.items?.length || 0}`);
+        console.log(`   ⏱️ Processing Time: ${(document.metrics?.processingTime / 1000).toFixed(1)}s`);
 
+        // Send completion notification
         if (socketId) {
             io.to(socketId).emit('processing_complete', {
                 documentId,
@@ -1083,9 +1139,22 @@ async function processDocumentAsyncWithUser(filePath, documentId, socketId, orig
             });
         }
 
-    } catch (error) {
-        console.error(`❌ Processing failed for ${originalName}:`, error);
+        console.log(`✅ Enhanced processing completed successfully for: ${originalName}`);
 
+        // Clean up original file after successful processing
+        setTimeout(async () => {
+            try {
+                await fs.unlink(filePath);
+                console.log(`🗑️ Cleaned up original file: ${originalName}`);
+            } catch (cleanupError) {
+                console.error('File cleanup failed:', cleanupError.message);
+            }
+        }, 60000); // Clean up after 1 minute
+
+    } catch (error) {
+        console.error(`❌ Enhanced processing failed for ${originalName}:`, error);
+
+        // Update document status
         const document = documents.get(documentId);
         if (document) {
             document.status = 'failed';
@@ -1096,12 +1165,33 @@ async function processDocumentAsyncWithUser(filePath, documentId, socketId, orig
         if (socketId) {
             io.to(socketId).emit('processing_error', {
                 documentId,
-                error: `Processing failed: ${error.message}`
+                error: `Enhanced processing failed: ${error.message}`
             });
+        }
+
+        // Cleanup file on error
+        try {
+            await fs.unlink(filePath);
+        } catch (cleanupError) {
+            console.error('Cleanup failed:', cleanupError.message);
         }
     }
 }
 
+// At the very END of your server.js file, AFTER the server.listen() call:
+server.listen(PORT, () => {
+    console.log('\n🤖 Enhanced ML/LLM Document Processing Server');
+    console.log(`📍 Running on: http://localhost:${PORT}`);
+    console.log(`🗄️  Database: ${process.env.DB_NAME || 'customer_registration'}`);
+    console.log(`🌐 Frontend: http://localhost:3000`);
+    // ... your existing console.log statements
+
+    // Initialize enhanced processor AFTER server is running
+    console.log('🔧 Initializing enhanced document processor...');
+    setTimeout(() => {
+        initializeEnhancedProcessor();
+    }, 1000); // Wait 1 second to ensure everything is ready
+});
 
 // Main enhanced document processing function
 async function processDocument(documentId, filePath, originalName, socketId, userId, companyId) {
@@ -2096,8 +2186,8 @@ app.delete('/api/documents/:documentId', authenticateToken, async (req, res) => 
     }
 });
 
-// Enhanced analytics with ML metrics
-app.get('/api/analytics/dashboard', authenticateToken, async (req, res) => {
+// Enhanced analytics endpoint that includes processing methods
+app.get('/api/analytics/enhanced-dashboard', authenticateToken, async (req, res) => {
     try {
         const userDocuments = Array.from(documents.values())
             .filter(doc => doc.userId === req.user.id);
@@ -2108,41 +2198,21 @@ app.get('/api/analytics/dashboard', authenticateToken, async (req, res) => {
         const failedDocuments = userDocuments.filter(doc => doc.status === 'failed').length;
 
         const completedDocs = userDocuments.filter(doc => doc.status === 'completed' && doc.metrics);
-        const avgConfidence = completedDocs.length > 0
-            ? completedDocs.reduce((sum, doc) => sum + doc.metrics.averageConfidence, 0) / completedDocs.length
-            : 0;
 
-        const avgDataQuality = completedDocs.length > 0
-            ? completedDocs.reduce((sum, doc) => sum + (doc.metrics.dataExtractionScore || 0), 0) / completedDocs.length
-            : 0;
-
-        const avgConsensusScore = completedDocs.length > 0
-            ? completedDocs.reduce((sum, doc) => sum + (doc.metrics.consensusScore || 0), 0) / completedDocs.length
-            : 0;
-
-        // ML extraction method usage
-        const extractionMethods = {};
+        // Method usage statistics
+        const methodStats = {};
         completedDocs.forEach(doc => {
-            if (doc.extractionMethods) {
-                doc.extractionMethods.forEach(method => {
-                    extractionMethods[method] = (extractionMethods[method] || 0) + 1;
-                });
-            }
+            const method = doc.metrics?.method || 'Unknown';
+            methodStats[method] = (methodStats[method] || 0) + 1;
         });
 
-        const recentDocuments = userDocuments
-            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-            .slice(0, 5)
-            .map(doc => ({
-                id: doc.id,
-                originalName: doc.originalName,
-                status: doc.status,
-                createdAt: doc.createdAt,
-                vendor: doc.invoiceData?.vendor?.name || doc.invoiceData?.vendor,
-                amount: doc.invoiceData?.amounts?.total || doc.invoiceData?.total,
-                extractionMethods: doc.extractionMethods,
-                dataQuality: doc.metrics?.dataExtractionScore
-            }));
+        const avgConfidence = completedDocs.length > 0
+            ? completedDocs.reduce((sum, doc) => sum + (doc.metrics?.confidence || 0), 0) / completedDocs.length
+            : 0;
+
+        const avgProcessingTime = completedDocs.length > 0
+            ? completedDocs.reduce((sum, doc) => sum + (doc.metrics?.processingTime || 0), 0) / completedDocs.length / 1000
+            : 0;
 
         res.json({
             summary: {
@@ -2151,20 +2221,27 @@ app.get('/api/analytics/dashboard', authenticateToken, async (req, res) => {
                 processingDocuments,
                 failedDocuments,
                 averageConfidence: avgConfidence,
-                averageDataQuality: avgDataQuality,
-                averageConsensusScore: avgConsensusScore,
-                averageProcessingTime: completedDocs.length > 0
-                    ? completedDocs.reduce((sum, doc) => sum + doc.metrics.processingTime, 0) / completedDocs.length / 1000
-                    : 0,
-                totalTextExtracted: completedDocs.reduce((sum, doc) => sum + (doc.metrics?.textLength || 0), 0),
-                totalPagesProcessed: completedDocs.reduce((sum, doc) => sum + (doc.metrics?.pagesProcessed || 0), 0),
-                extractionMethodsUsage: extractionMethods
+                averageProcessingTime: avgProcessingTime,
+                methodUsage: methodStats,
+                googleAIEnabled: enhancedProcessor.useGoogleAI
             },
-            recentDocuments
+            recentDocuments: userDocuments
+                .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                .slice(0, 5)
+                .map(doc => ({
+                    id: doc.id,
+                    originalName: doc.originalName,
+                    status: doc.status,
+                    createdAt: doc.createdAt,
+                    method: doc.metrics?.method || 'Unknown',
+                    confidence: doc.metrics?.confidence || 0,
+                    vendor: doc.invoiceData?.vendor?.name || 'Unknown',
+                    amount: doc.invoiceData?.amounts?.total || 0
+                }))
         });
     } catch (error) {
-        console.error('Get analytics error:', error);
-        res.status(500).json({ error: 'Failed to get analytics data' });
+        console.error('Enhanced analytics error:', error);
+        res.status(500).json({ error: 'Failed to get enhanced analytics data' });
     }
 });
 
@@ -2503,23 +2580,5 @@ app.use((error, req, res, next) => {
 // Create uploads directory
 const uploadsDir = path.join(__dirname, 'uploads');
 fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
-
-// Start server
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-    console.log('\n🤖 Enhanced ML/LLM Document Processing Server');
-    console.log(`📍 Running on: http://localhost:${PORT}`);
-    console.log(`🗄️  Database: ${process.env.DB_NAME || 'customer_registration'}`);
-    console.log(`🌐 Frontend: http://localhost:3000`);
-    console.log('📄 Document Processing: Enhanced with ML/LLM');
-    console.log('🔍 OCR: Tesseract.js with pdf2pic conversion');
-    console.log('🤖 ML Models:');
-    console.log(`   - OpenAI GPT: ${LLM_CONFIG.openai.apiKey ? '✅ Configured' : '❌ Not configured'}`);
-    console.log(`   - Claude AI: ${LLM_CONFIG.claude.apiKey ? '✅ Configured' : '❌ Not configured'}`);
-    console.log(`   - Ollama Local: ${LLM_CONFIG.ollama.endpoint ? '✅ Available' : '❌ Not available'}`);
-    console.log('🔌 Socket.IO: Real-time processing updates');
-    console.log('────────────────────────────────');
-    console.log('✨ Ready for advanced ML/LLM invoice processing!\n');
-});
 
 module.exports = app;
