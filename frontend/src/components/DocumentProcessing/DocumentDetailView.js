@@ -1,4 +1,5 @@
-// src/components/DocumentProcessing/DocumentDetailView.js - Improved version with better data handling
+// Complete DocumentDetailView.js with responsive layout and visible content - FIXED JSX ERRORS
+
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
@@ -60,26 +61,33 @@ import {
     NavigateNext,
     TrendingUp,
     Info,
-    Download,
-    Print,
-    Share,
-    OpenInNew,
     Edit,
     Save,
     Cancel,
-    Check,
-    Warning,
     Code,
     ContentCopy,
     ExpandMore,
     Add,
     Delete,
-    ShoppingCart,
-    Calculate
+    ShoppingCart
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import SimplePDFViewer from './SimplePDFViewer';
+
+// Configure axios defaults
+const api = axios.create({
+    baseURL: 'http://localhost:5000',
+    timeout: 30000,
+});
+
+api.interceptors.request.use((config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+});
 
 const DocumentDetailView = () => {
     const { documentId } = useParams();
@@ -100,7 +108,7 @@ const DocumentDetailView = () => {
     const { data: invoiceDocument, isLoading, error: fetchError } = useQuery({
         queryKey: ['document', documentId],
         queryFn: async () => {
-            const response = await axios.get(`/documents/${documentId}`);
+            const response = await api.get(`/api/documents/${documentId}`);
             return response.data;
         },
         enabled: !!documentId
@@ -109,7 +117,7 @@ const DocumentDetailView = () => {
     // Save document changes mutation
     const saveDocumentMutation = useMutation({
         mutationFn: async (updatedData) => {
-            const response = await axios.put(`/documents/${documentId}`, {
+            const response = await api.put(`/api/documents/${documentId}`, {
                 invoiceData: updatedData
             });
             return response.data;
@@ -135,7 +143,7 @@ const DocumentDetailView = () => {
         }
     });
 
-    // IMPROVED: Initialize edited data when document loads
+    // Initialize edited data when document loads
     useEffect(() => {
         if (invoiceDocument?.invoiceData) {
             const data = normalizeInvoiceData(invoiceDocument.invoiceData);
@@ -150,7 +158,7 @@ const DocumentDetailView = () => {
         }
     }, [invoiceDocument]);
 
-    // IMPROVED: Data normalization function
+    // Data normalization function
     const normalizeInvoiceData = (data) => {
         const normalized = { ...data };
 
@@ -161,9 +169,8 @@ const DocumentDetailView = () => {
         if (!normalized.paymentDetails) normalized.paymentDetails = {};
         if (!normalized.orderInfo) normalized.orderInfo = {};
 
-        // IMPROVED: Handle line items from multiple possible sources
+        // Handle line items
         if (!normalized.lineItems || normalized.lineItems.length === 0) {
-            // Try to get from 'items' field
             if (data.items && Array.isArray(data.items) && data.items.length > 0) {
                 normalized.lineItems = data.items.map((item, index) => ({
                     id: item.id || `item-${index}`,
@@ -175,134 +182,50 @@ const DocumentDetailView = () => {
             } else {
                 normalized.lineItems = [];
             }
-        } else {
-            // Normalize existing lineItems
-            normalized.lineItems = normalized.lineItems.map((item, index) => ({
-                id: item.id || `item-${index}`,
-                description: getItemDescription(item),
-                quantity: parseFloat(item.quantity || item.qty || 1),
-                unitPrice: parseFloat(item.unitPrice || item.price || item.rate || 0),
-                amount: parseFloat(item.amount || item.total || (item.quantity * item.unitPrice) || 0)
-            }));
         }
 
-        // IMPROVED: Vendor name normalization
+        // Vendor name normalization
         if (!normalized.vendor.name) {
             normalized.vendor.name = getVendorName(data);
         }
 
-        // IMPROVED: Currency normalization
+        // Currency normalization
         if (!normalized.amounts.currency) {
             normalized.amounts.currency = detectCurrency(data);
         }
 
-        // IMPROVED: Date normalization
-        if (normalized.date && typeof normalized.date === 'string') {
-            normalized.date = normalizeDate(normalized.date);
-        }
-        if (normalized.dueDate && typeof normalized.dueDate === 'string') {
-            normalized.dueDate = normalizeDate(normalized.dueDate);
-        }
-
-        // Ensure items array is in sync with lineItems
         normalized.items = normalized.lineItems;
-
         return normalized;
     };
 
-    // IMPROVED: Helper function to get item description from various formats
+    // Helper functions
     const getItemDescription = (item) => {
         if (item.description) return item.description;
         if (item.name) return item.name;
-        if (item.itemDescription) return item.itemDescription;
-        if (item.service) return item.service;
-        if (item.product) return item.product;
         return 'Unknown Item';
     };
 
-    // IMPROVED: Enhanced vendor name extraction
     const getVendorName = (invoiceData) => {
-        // Try multiple possible vendor name fields
-        const vendorNameFields = [
-            'vendor.name',
-            'vendor.companyName',
-            'vendorName',
-            'supplier',
-            'from',
-            'company',
-            'businessName'
-        ];
-
+        const vendorNameFields = ['vendor.name', 'vendorName', 'supplier', 'from', 'company'];
         for (const field of vendorNameFields) {
             const value = getNestedValue(invoiceData, field);
-            if (value && typeof value === 'string' && value !== '[object Object]' && value.length > 1) {
+            if (value && typeof value === 'string' && value.length > 1) {
                 return value;
             }
         }
-
-        // Fallback: try to extract from vendor object
-        if (invoiceData.vendor && typeof invoiceData.vendor === 'object') {
-            const vendor = invoiceData.vendor;
-            if (vendor.email) return vendor.email;
-            if (vendor.phone) return vendor.phone;
-        }
-
         return 'Unknown Vendor';
     };
 
-    // IMPROVED: Currency detection
     const detectCurrency = (invoiceData) => {
-        // Check explicit currency fields
         if (invoiceData.amounts?.currency) return invoiceData.amounts.currency;
         if (invoiceData.currency) return invoiceData.currency;
-
-        // Try to detect from text or amounts
-        const text = JSON.stringify(invoiceData).toLowerCase();
-        if (text.includes('myr') || text.includes(' rm ')) return 'MYR';
-        if (text.includes('usd') || text.includes('$')) return 'USD';
-        if (text.includes('cad')) return 'CAD';
-        if (text.includes('eur') || text.includes('€')) return 'EUR';
-        if (text.includes('gbp') || text.includes('£')) return 'GBP';
-        if (text.includes('inr') || text.includes('₹')) return 'INR';
-
-        return 'MYR'; // Default for Malaysian invoices
+        return 'MYR';
     };
 
-    // Helper function to get nested object values
     const getNestedValue = (obj, path) => {
         return path.split('.').reduce((current, key) => current?.[key], obj);
     };
 
-    // Helper function to normalize dates
-    const normalizeDate = (dateString) => {
-        if (!dateString) return '';
-
-        try {
-            // Handle various date formats
-            let date;
-
-            // DD/MM/YYYY or DD-MM-YYYY
-            const ddmmyyyy = dateString.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
-            if (ddmmyyyy) {
-                const day = ddmmyyyy[1].padStart(2, '0');
-                const month = ddmmyyyy[2].padStart(2, '0');
-                const year = ddmmyyyy[3];
-                return `${year}-${month}-${day}`;
-            }
-
-            // Try standard Date parsing
-            date = new Date(dateString);
-            if (date instanceof Date && !isNaN(date)) {
-                return date.toISOString().split('T')[0];
-            }
-
-            return dateString;
-        } catch (error) {
-            return dateString;
-        }
-    };
-
-    // Helper functions for UI
     const getFileTypeIcon = (filename) => {
         const ext = filename?.split('.').pop()?.toLowerCase();
         switch (ext) {
@@ -393,80 +316,6 @@ const DocumentDetailView = () => {
             current = current[key];
         }
         return current || '';
-    };
-
-    // IMPROVED: Line Items functions
-    const addLineItem = () => {
-        const newLineItem = {
-            id: Date.now().toString(),
-            description: '',
-            quantity: 1,
-            unitPrice: 0,
-            amount: 0
-        };
-
-        const newData = { ...editedData };
-        if (!newData.lineItems) {
-            newData.lineItems = [];
-        }
-        newData.lineItems.push(newLineItem);
-
-        setEditedData(newData);
-        setHasChanges(true);
-    };
-
-    const removeLineItem = (index) => {
-        const newData = { ...editedData };
-        newData.lineItems.splice(index, 1);
-        setEditedData(newData);
-        setHasChanges(true);
-        recalculateTotals(newData);
-    };
-
-    const updateLineItem = (index, field, value) => {
-        const newData = { ...editedData };
-        if (!newData.lineItems) return;
-
-        newData.lineItems[index][field] = value;
-
-        // Auto-calculate amount if quantity or unitPrice changes
-        if (field === 'quantity' || field === 'unitPrice') {
-            const item = newData.lineItems[index];
-            item.amount = (parseFloat(item.quantity) || 0) * (parseFloat(item.unitPrice) || 0);
-        }
-
-        setEditedData(newData);
-        setHasChanges(true);
-        recalculateTotals(newData);
-    };
-
-    const recalculateTotals = (data) => {
-        if (!data.lineItems || data.lineItems.length === 0) return;
-
-        const subtotal = data.lineItems.reduce((sum, item) => {
-            return sum + (parseFloat(item.amount) || 0);
-        }, 0);
-
-        // Update amounts object
-        if (!data.amounts) data.amounts = {};
-        data.amounts.subtotal = subtotal;
-
-        // Calculate tax if tax rate exists
-        const taxRateMatch = data.amounts.taxRate?.match(/(\d+(?:\.\d+)?)/);
-        const taxRate = taxRateMatch ? parseFloat(taxRateMatch[1]) : 0;
-        const tax = subtotal * (taxRate / 100);
-        data.amounts.tax = tax;
-        data.amounts.total = subtotal + tax;
-
-        // Also update the items array to keep it in sync
-        data.items = data.lineItems;
-    };
-
-    const calculateLineItemsTotal = () => {
-        if (!editedData.lineItems) return 0;
-        return editedData.lineItems.reduce((sum, item) => {
-            return sum + (parseFloat(item.amount) || 0);
-        }, 0);
     };
 
     const handleSave = () => {
@@ -560,269 +409,63 @@ const DocumentDetailView = () => {
         const fieldValue = isEditing ? getFieldValue(path) : value;
 
         return (
-            <ListItem sx={{ px: 0, py: 1 }}>
-                <ListItemIcon sx={{ minWidth: 40 }}>
-                    {icon}
-                </ListItemIcon>
-                <ListItemText
-                    primary={
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-                                {label}
-                            </Typography>
-                            <Tooltip title={`Confidence: ${confidence.toFixed(1)}%`}>
-                                <Chip
-                                    size="small"
-                                    label={`${confidence.toFixed(0)}%`}
-                                    color={getConfidenceColor(confidence)}
-                                    variant="outlined"
-                                />
-                            </Tooltip>
-                        </Box>
-                    }
-                    secondary={
-                        isEditing ? (
-                            <TextField
-                                fullWidth
-                                size="small"
-                                type={type}
-                                value={fieldValue}
-                                onChange={(e) => handleFieldChange(path, e.target.value)}
-                                multiline={multiline}
-                                rows={multiline ? 2 : 1}
-                                sx={{ mt: 0.5 }}
-                                placeholder={`Enter ${label.toLowerCase()}`}
-                            />
-                        ) : (
-                            <Typography variant="body1" sx={{ fontWeight: 500, mt: 0.5 }}>
-                                {fieldValue || 'Not found'}
-                            </Typography>
-                        )
-                    }
-                />
-            </ListItem>
-        );
-    };
-
-    // IMPROVED: Line Items Table Component
-    const LineItemsTable = () => {
-        const lineItems = editedData.lineItems || [];
-        const lineItemsTotal = calculateLineItemsTotal();
-        const currency = editedData.amounts?.currency || 'MYR';
-
-        return (
-            <Box>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
-                    <Typography variant="subtitle1" sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold' }}>
-                        <ShoppingCart sx={{ mr: 1 }} />
-                        Line Items
+            <Box sx={{ mb: 2 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        {icon && <Box sx={{ mr: 1, display: 'flex' }}>{icon}</Box>}
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                            {label}
+                        </Typography>
+                    </Box>
+                    <Tooltip title={`Confidence: ${confidence.toFixed(1)}%`}>
                         <Chip
-                            label={`${lineItems.length} items`}
                             size="small"
-                            color="primary"
+                            label={`${confidence.toFixed(0)}%`}
+                            color={getConfidenceColor(confidence)}
                             variant="outlined"
-                            sx={{ ml: 1 }}
                         />
-                    </Typography>
-                    {editMode && (
-                        <Button
-                            variant="outlined"
-                            size="small"
-                            startIcon={<Add />}
-                            onClick={addLineItem}
-                            color="primary"
-                        >
-                            Add Item
-                        </Button>
-                    )}
+                    </Tooltip>
                 </Box>
 
-                {lineItems.length === 0 ? (
-                    <Box sx={{ textAlign: 'center', py: 3, color: 'text.secondary' }}>
-                        <ShoppingCart sx={{ fontSize: 48, mb: 1, opacity: 0.5 }} />
-                        <Typography variant="body1" sx={{ mb: 1 }}>
-                            No line items found in extracted data
-                        </Typography>
-                        <Typography variant="caption" sx={{ display: 'block', mb: 2, fontStyle: 'italic' }}>
-                            This could be a service invoice or the extraction may need improvement
-                        </Typography>
-                        {editMode && (
-                            <Button
-                                variant="contained"
-                                size="small"
-                                startIcon={<Add />}
-                                onClick={addLineItem}
-                                sx={{ mt: 1 }}
-                            >
-                                Add Item Manually
-                            </Button>
-                        )}
-
-                        {/* IMPROVED: Debug Information */}
-                        <Accordion sx={{ mt: 2, textAlign: 'left' }}>
-                            <AccordionSummary expandIcon={<ExpandMore />}>
-                                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
-                                    Debug Info - Click to expand
-                                </Typography>
-                            </AccordionSummary>
-                            <AccordionDetails>
-                                <Typography variant="caption" sx={{ display: 'block', mb: 1 }}>
-                                    Available fields: {Object.keys(editedData).join(', ')}
-                                </Typography>
-                                {editedData.items && (
-                                    <Typography variant="caption" sx={{ display: 'block', color: 'primary.main', mb: 1 }}>
-                                        Found 'items' field with {Array.isArray(editedData.items) ? editedData.items.length : 'non-array'} entries
-                                    </Typography>
-                                )}
-                                {editedData.items && Array.isArray(editedData.items) && editedData.items.length > 0 && (
-                                    <Box sx={{ maxHeight: 100, overflow: 'auto', bgcolor: 'grey.100', p: 1, borderRadius: 1 }}>
-                                        <pre style={{ margin: 0, fontSize: '10px' }}>
-                                            {JSON.stringify(editedData.items, null, 2)}
-                                        </pre>
-                                    </Box>
-                                )}
-                            </AccordionDetails>
-                        </Accordion>
-                    </Box>
+                {isEditing ? (
+                    <TextField
+                        fullWidth
+                        size="small"
+                        type={type}
+                        value={fieldValue}
+                        onChange={(e) => handleFieldChange(path, e.target.value)}
+                        multiline={multiline}
+                        rows={multiline ? 2 : 1}
+                        placeholder={`Enter ${label.toLowerCase()}`}
+                        variant="outlined"
+                    />
                 ) : (
-                    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 400 }}>
-                        <Table size="small" stickyHeader>
-                            <TableHead>
-                                <TableRow sx={{ bgcolor: 'grey.50' }}>
-                                    <TableCell sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>Description</TableCell>
-                                    <TableCell align="center" sx={{ fontWeight: 'bold', minWidth: 80, fontSize: '0.75rem' }}>Quantity</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 'bold', minWidth: 100, fontSize: '0.75rem' }}>Unit Price ({currency})</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 'bold', minWidth: 100, fontSize: '0.75rem' }}>Amount ({currency})</TableCell>
-                                    {editMode && (
-                                        <TableCell align="center" sx={{ fontWeight: 'bold', width: 60 }}>Actions</TableCell>
-                                    )}
-                                </TableRow>
-                            </TableHead>
-                            <TableBody>
-                                {lineItems.map((item, index) => (
-                                    <TableRow key={item.id || index} hover>
-                                        <TableCell sx={{ py: 0.5 }}>
-                                            {editMode ? (
-                                                <TextField
-                                                    fullWidth
-                                                    size="small"
-                                                    value={item.description || ''}
-                                                    onChange={(e) => updateLineItem(index, 'description', e.target.value)}
-                                                    placeholder="Item description"
-                                                    variant="outlined"
-                                                    multiline
-                                                    maxRows={3}
-                                                    sx={{ '& .MuiInputBase-input': { fontSize: '0.75rem', py: 0.5 } }}
-                                                />
-                                            ) : (
-                                                <Typography variant="body2" sx={{ fontSize: '0.75rem', lineHeight: 1.2 }}>
-                                                    {item.description || 'No description'}
-                                                </Typography>
-                                            )}
-                                        </TableCell>
-                                        <TableCell align="center" sx={{ py: 0.5 }}>
-                                            {editMode ? (
-                                                <TextField
-                                                    size="small"
-                                                    type="number"
-                                                    value={item.quantity || ''}
-                                                    onChange={(e) => updateLineItem(index, 'quantity', parseFloat(e.target.value) || 0)}
-                                                    sx={{ width: 70, '& .MuiInputBase-input': { fontSize: '0.75rem', py: 0.5, textAlign: 'center' } }}
-                                                    inputProps={{ min: 0, step: 0.01 }}
-                                                />
-                                            ) : (
-                                                <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                                                    {parseFloat(item.quantity || 0).toLocaleString()}
-                                                </Typography>
-                                            )}
-                                        </TableCell>
-                                        <TableCell align="right" sx={{ py: 0.5 }}>
-                                            {editMode ? (
-                                                <TextField
-                                                    size="small"
-                                                    type="number"
-                                                    value={item.unitPrice || ''}
-                                                    onChange={(e) => updateLineItem(index, 'unitPrice', parseFloat(e.target.value) || 0)}
-                                                    sx={{ width: 90, '& .MuiInputBase-input': { fontSize: '0.75rem', py: 0.5, textAlign: 'right' } }}
-                                                    inputProps={{ min: 0, step: 0.01 }}
-                                                />
-                                            ) : (
-                                                <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                                                    {formatCurrency(item.unitPrice, currency)}
-                                                </Typography>
-                                            )}
-                                        </TableCell>
-                                        <TableCell align="right" sx={{ py: 0.5 }}>
-                                            <Typography variant="body2" sx={{ fontWeight: 'bold', fontSize: '0.75rem' }}>
-                                                {formatCurrency(item.amount, currency)}
-                                            </Typography>
-                                        </TableCell>
-                                        {editMode && (
-                                            <TableCell align="center" sx={{ py: 0.5 }}>
-                                                <IconButton
-                                                    size="small"
-                                                    color="error"
-                                                    onClick={() => removeLineItem(index)}
-                                                    sx={{ minWidth: 'auto', p: 0.5 }}
-                                                >
-                                                    <Delete fontSize="small" />
-                                                </IconButton>
-                                            </TableCell>
-                                        )}
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                            <TableFooter>
-                                <TableRow sx={{ bgcolor: 'primary.light' }}>
-                                    <TableCell colSpan={editMode ? 3 : 3} sx={{ fontWeight: 'bold', color: 'primary.contrastText', fontSize: '0.8rem' }}>
-                                        Line Items Total
-                                    </TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 'bold', color: 'primary.contrastText', fontSize: '0.8rem' }}>
-                                        {formatCurrency(lineItemsTotal, currency)}
-                                    </TableCell>
-                                    {editMode && <TableCell />}
-                                </TableRow>
-                            </TableFooter>
-                        </Table>
-                    </TableContainer>
-                )}
-
-                {lineItems.length > 0 && (
-                    <Box sx={{ mt: 1, p: 1.5, bgcolor: 'grey.50', borderRadius: 1 }}>
-                        <Grid container spacing={2}>
-                            <Grid item xs={4}>
-                                <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
-                                    Total Items
-                                </Typography>
-                                <Typography variant="subtitle2">
-                                    {lineItems.length}
-                                </Typography>
-                            </Grid>
-                            <Grid item xs={4}>
-                                <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
-                                    Total Quantity
-                                </Typography>
-                                <Typography variant="subtitle2">
-                                    {lineItems.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0).toLocaleString()}
-                                </Typography>
-                            </Grid>
-                            <Grid item xs={4}>
-                                <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
-                                    Average Unit Price
-                                </Typography>
-                                <Typography variant="subtitle2">
-                                    {formatCurrency(lineItems.length > 0 ? lineItemsTotal / lineItems.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0) : 0, currency)}
-                                </Typography>
-                            </Grid>
-                        </Grid>
-                    </Box>
+                    <Typography
+                        variant="body1"
+                        sx={{
+                            fontWeight: 500,
+                            minHeight: '1.5em',
+                            p: 1,
+                            bgcolor: 'grey.50',
+                            borderRadius: 1,
+                            border: '1px solid',
+                            borderColor: 'grey.200'
+                        }}
+                    >
+                        {fieldValue || 'Not found'}
+                    </Typography>
                 )}
             </Box>
         );
     };
 
     return (
-        <Box sx={{ flexGrow: 1, bgcolor: 'background.default', minHeight: '100vh' }}>
+        <Box sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100vh',
+            bgcolor: 'background.default'
+        }}>
             {/* Header */}
             <AppBar position="static" color="default" elevation={1}>
                 <Toolbar>
@@ -947,7 +590,7 @@ const DocumentDetailView = () => {
 
             {/* Unsaved Changes Alert */}
             {hasChanges && (
-                <Alert severity="warning" sx={{ m: 2 }}>
+                <Alert severity="warning" sx={{ mx: 2, mt: 1 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Typography variant="body2">
                             You have unsaved changes. Don't forget to save your modifications.
@@ -959,332 +602,404 @@ const DocumentDetailView = () => {
                 </Alert>
             )}
 
-            {/* Main Content */}
-            <Box sx={{ flexGrow: 1, p: 3 }}>
-                <Grid container spacing={3}>
-                    {/* Left Panel */}
-                    <Grid item xs={12} lg={5} md={6}>
-                        <Paper sx={{
-                            overflow: 'auto',
-                            p: 2,
-                            maxHeight: { md: 'calc(100vh - 250px)', xs: 'none' },
-                            minHeight: { xs: '500px', md: 'auto' }
-                        }}>
-                            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+            {/* Main Content - Fixed Side-by-Side Layout */}
+            <Box sx={{
+                flex: 1,
+                display: 'flex',
+                overflow: 'hidden',
+                p: 2,
+                gap: 2
+            }}>
+                {/* Left Panel - Invoice Data */}
+                <Box sx={{
+                    width: '600px',
+                    minWidth: '600px',
+                    maxWidth: '600px',
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}>
+                    <Paper sx={{ flex: 1, overflow: 'auto', p: 3 }}>
+                        <Typography variant="h5" sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+                            <Receipt sx={{ mr: 1 }} />
+                            Invoice Data
+                            {editMode && (
+                                <Tooltip title="Edit mode active">
+                                    <Edit color="primary" fontSize="small" sx={{ ml: 1 }} />
+                                </Tooltip>
+                            )}
+                        </Typography>
+
+                        {/* Confidence Score */}
+                        <Card variant="outlined" sx={{ mb: 3, bgcolor: 'primary.light', color: 'primary.contrastText' }}>
+                            <CardContent>
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <Typography variant="h6">Overall Confidence</Typography>
+                                    <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
+                                        {invoiceDocument.metrics?.averageConfidence?.toFixed(1) || 0}%
+                                    </Typography>
+                                </Box>
+                                <LinearProgress
+                                    variant="determinate"
+                                    value={invoiceDocument.metrics?.averageConfidence || 0}
+                                    sx={{ mt: 2, height: 8, borderRadius: 4 }}
+                                    color="inherit"
+                                />
+                            </CardContent>
+                        </Card>
+
+                        {/* Invoice Details */}
+                        <Box sx={{ mb: 4 }}>
+                            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold', mb: 2 }}>
                                 <Receipt sx={{ mr: 1 }} />
-                                Invoice Data
-                                {editMode && (
-                                    <Tooltip title="Edit mode active">
-                                        <Edit color="primary" fontSize="small" sx={{ ml: 1 }} />
-                                    </Tooltip>
-                                )}
+                                Invoice Details
                             </Typography>
 
-                            {/* Confidence Score */}
-                            <Card variant="outlined" sx={{ mb: 2, bgcolor: 'primary.light', color: 'primary.contrastText' }}>
-                                <CardContent sx={{ py: 1.5 }}>
-                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <Typography variant="subtitle1">Overall Confidence</Typography>
-                                        <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                                            {invoiceDocument.metrics?.averageConfidence?.toFixed(1) || 0}%
-                                        </Typography>
+                            <EditableFieldWithConfidence
+                                label="Invoice Number"
+                                value={editedData.invoiceNumber}
+                                fieldName="invoiceNumber"
+                                path="invoiceNumber"
+                                icon={<Description fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Invoice Date"
+                                value={editedData.date}
+                                fieldName="date"
+                                path="date"
+                                type="date"
+                                icon={<Schedule fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Due Date"
+                                value={editedData.dueDate}
+                                fieldName="dueDate"
+                                path="dueDate"
+                                type="date"
+                                icon={<Schedule fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="PO Number"
+                                value={editedData.orderInfo?.orderNumber}
+                                fieldName="orderInfo.orderNumber"
+                                path="orderInfo.orderNumber"
+                                icon={<Assignment fontSize="small" />}
+                            />
+                        </Box>
+
+                        {/* Vendor Information */}
+                        <Box sx={{ mb: 4 }}>
+                            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold', mb: 2 }}>
+                                <Business sx={{ mr: 1 }} />
+                                Vendor Information
+                            </Typography>
+
+                            <EditableFieldWithConfidence
+                                label="Vendor Name"
+                                value={editedData.vendor?.name}
+                                fieldName="vendor.name"
+                                path="vendor.name"
+                                icon={<Business fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Phone"
+                                value={editedData.vendor?.phone}
+                                fieldName="vendor.phone"
+                                path="vendor.phone"
+                                type="tel"
+                                icon={<Info fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Email"
+                                value={editedData.vendor?.email}
+                                fieldName="vendor.email"
+                                path="vendor.email"
+                                type="email"
+                                icon={<Info fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Address"
+                                value={editedData.vendor?.address}
+                                fieldName="vendor.address"
+                                path="vendor.address"
+                                multiline={true}
+                                icon={<Info fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Tax ID / SST No"
+                                value={editedData.vendor?.taxId}
+                                fieldName="vendor.taxId"
+                                path="vendor.taxId"
+                                icon={<Info fontSize="small" />}
+                            />
+                        </Box>
+
+                        {/* Financial Details */}
+                        <Box sx={{ mb: 4 }}>
+                            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold', mb: 2 }}>
+                                <TrendingUp sx={{ mr: 1 }} />
+                                Financial Details
+                            </Typography>
+
+                            <EditableFieldWithConfidence
+                                label="Subtotal"
+                                value={editedData.amounts?.subtotal}
+                                fieldName="amounts.subtotal"
+                                path="amounts.subtotal"
+                                type="number"
+                                icon={<TrendingUp fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Tax Amount"
+                                value={editedData.amounts?.tax}
+                                fieldName="amounts.tax"
+                                path="amounts.tax"
+                                type="number"
+                                icon={<TrendingUp fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Tax Rate (%)"
+                                value={editedData.amounts?.taxRate}
+                                fieldName="amounts.taxRate"
+                                path="amounts.taxRate"
+                                icon={<Info fontSize="small" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Total Amount"
+                                value={editedData.amounts?.total}
+                                fieldName="amounts.total"
+                                path="amounts.total"
+                                type="number"
+                                icon={<TrendingUp fontSize="small" color="primary" />}
+                            />
+                            <EditableFieldWithConfidence
+                                label="Currency"
+                                value={editedData.amounts?.currency}
+                                fieldName="amounts.currency"
+                                path="amounts.currency"
+                                icon={<Info fontSize="small" />}
+                            />
+
+                            {/* Financial Summary */}
+                            {editedData.amounts?.total && (
+                                <Box sx={{ mt: 3, p: 2, bgcolor: 'success.light', borderRadius: 2 }}>
+                                    <Typography variant="h5" color="success.contrastText" align="center" sx={{ fontWeight: 'bold' }}>
+                                        Total: {formatCurrency(editedData.amounts.total, editedData.amounts?.currency)}
+                                    </Typography>
+                                </Box>
+                            )}
+                        </Box>
+
+                        {/* Line Items Section */}
+                        <Box sx={{ mb: 4 }}>
+                            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold', mb: 2 }}>
+                                <ShoppingCart sx={{ mr: 1 }} />
+                                Line Items
+                                <Chip
+                                    label={`${editedData.lineItems?.length || 0} items`}
+                                    size="small"
+                                    color="primary"
+                                    variant="outlined"
+                                    sx={{ ml: 1 }}
+                                />
+                            </Typography>
+
+                            {editedData.lineItems && editedData.lineItems.length > 0 ? (
+                                <Box>
+                                    {editedData.lineItems.map((item, index) => (
+                                        <Card key={index} variant="outlined" sx={{ mb: 2 }}>
+                                            <CardContent sx={{ py: 2 }}>
+                                                <Grid container spacing={2}>
+                                                    <Grid item xs={12}>
+                                                        <Typography variant="subtitle2" color="text.secondary">
+                                                            Item {index + 1}
+                                                        </Typography>
+                                                        <Typography variant="body1" sx={{ fontWeight: 'bold' }}>
+                                                            {item.description || 'No description'}
+                                                        </Typography>
+                                                    </Grid>
+                                                    <Grid item xs={4}>
+                                                        <Typography variant="caption" color="text.secondary">
+                                                            Quantity
+                                                        </Typography>
+                                                        <Typography variant="body2">
+                                                            {item.quantity || 1}
+                                                        </Typography>
+                                                    </Grid>
+                                                    <Grid item xs={4}>
+                                                        <Typography variant="caption" color="text.secondary">
+                                                            Unit Price
+                                                        </Typography>
+                                                        <Typography variant="body2">
+                                                            {formatCurrency(item.unitPrice, editedData.amounts?.currency)}
+                                                        </Typography>
+                                                    </Grid>
+                                                    <Grid item xs={4}>
+                                                        <Typography variant="caption" color="text.secondary">
+                                                            Amount
+                                                        </Typography>
+                                                        <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                                                            {formatCurrency(item.amount, editedData.amounts?.currency)}
+                                                        </Typography>
+                                                    </Grid>
+                                                </Grid>
+                                            </CardContent>
+                                        </Card>
+                                    ))}
+                                </Box>
+                            ) : (
+                                <Box sx={{ textAlign: 'center', py: 4, bgcolor: 'grey.50', borderRadius: 2 }}>
+                                    <ShoppingCart sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
+                                    <Typography variant="h6" sx={{ mb: 1 }}>
+                                        No line items found
+                                    </Typography>
+                                    <Typography variant="body2" color="text.secondary">
+                                        This could be a service invoice or the extraction may need improvement
+                                    </Typography>
+                                </Box>
+                            )}
+                        </Box>
+
+                        {/* Processing Metrics */}
+                        <Box>
+                            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold', mb: 2 }}>
+                                <Assignment sx={{ mr: 1 }} />
+                                Processing Metrics
+                            </Typography>
+                            <Grid container spacing={3}>
+                                <Grid item xs={6}>
+                                    <Typography variant="body2" color="text.secondary">
+                                        Processing Time
+                                    </Typography>
+                                    <Typography variant="h6">
+                                        {((invoiceDocument.metrics?.processingTime || 0) / 1000).toFixed(1)}s
+                                    </Typography>
+                                </Grid>
+                                <Grid item xs={6}>
+                                    <Typography variant="body2" color="text.secondary">
+                                        Data Quality
+                                    </Typography>
+                                    <Typography variant="h6">
+                                        {invoiceDocument.metrics?.dataExtractionScore?.toFixed(0) || 'N/A'}%
+                                    </Typography>
+                                </Grid>
+                                <Grid item xs={6}>
+                                    <Typography variant="body2" color="text.secondary">
+                                        Pages Processed
+                                    </Typography>
+                                    <Typography variant="h6">
+                                        {invoiceDocument.metrics?.pagesProcessed || 1}
+                                    </Typography>
+                                </Grid>
+                                <Grid item xs={6}>
+                                    <Typography variant="body2" color="text.secondary">
+                                        Consensus Score
+                                    </Typography>
+                                    <Typography variant="h6">
+                                        {invoiceDocument.metrics?.consensusScore?.toFixed(0) || 'N/A'}%
+                                    </Typography>
+                                </Grid>
+                            </Grid>
+
+                            {invoiceDocument.extractionMethods && invoiceDocument.extractionMethods.length > 0 && (
+                                <Box sx={{ mt: 3 }}>
+                                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                                        Extraction Methods Used:
+                                    </Typography>
+                                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                                        {invoiceDocument.extractionMethods.map((method, index) => (
+                                            <Chip
+                                                key={index}
+                                                label={method}
+                                                size="small"
+                                                variant="outlined"
+                                                color={
+                                                    method.includes('OpenAI') ? 'primary' :
+                                                        method.includes('Claude') ? 'secondary' :
+                                                            method.includes('Ollama') ? 'info' :
+                                                                method.includes('enhanced_regex') ? 'success' : 'default'
+                                                }
+                                            />
+                                        ))}
                                     </Box>
-                                    <LinearProgress
-                                        variant="determinate"
-                                        value={invoiceDocument.metrics?.averageConfidence || 0}
-                                        sx={{ mt: 1, height: 4, borderRadius: 2 }}
-                                        color="inherit"
-                                    />
-                                </CardContent>
-                            </Card>
+                                </Box>
+                            )}
+                        </Box>
+                    </Paper>
+                </Box>
 
-                            {/* Invoice Details */}
-                            <Card variant="outlined" sx={{ mb: 2 }}>
-                                <CardContent sx={{ py: 1.5 }}>
-                                    <Typography variant="subtitle1" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold' }}>
-                                        <Receipt sx={{ mr: 1 }} />
-                                        Invoice Details
-                                    </Typography>
-                                    <List dense>
-                                        <EditableFieldWithConfidence
-                                            label="Invoice Number"
-                                            value={editedData.invoiceNumber}
-                                            fieldName="invoiceNumber"
-                                            path="invoiceNumber"
-                                            icon={<Description fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Invoice Date"
-                                            value={editedData.date}
-                                            fieldName="date"
-                                            path="date"
-                                            type="date"
-                                            icon={<Schedule fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Due Date"
-                                            value={editedData.dueDate}
-                                            fieldName="dueDate"
-                                            path="dueDate"
-                                            type="date"
-                                            icon={<Schedule fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="PO Number"
-                                            value={editedData.orderInfo?.orderNumber}
-                                            fieldName="orderInfo.orderNumber"
-                                            path="orderInfo.orderNumber"
-                                            icon={<Assignment fontSize="small" />}
-                                        />
-                                    </List>
-                                </CardContent>
-                            </Card>
-
-                            {/* Vendor Information */}
-                            <Card variant="outlined" sx={{ mb: 2 }}>
-                                <CardContent sx={{ py: 1.5 }}>
-                                    <Typography variant="subtitle1" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold' }}>
-                                        <Business sx={{ mr: 1 }} />
-                                        Vendor Information
-                                    </Typography>
-                                    <List dense>
-                                        <EditableFieldWithConfidence
-                                            label="Vendor Name"
-                                            value={editedData.vendor?.name}
-                                            fieldName="vendor.name"
-                                            path="vendor.name"
-                                            icon={<Business fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Phone"
-                                            value={editedData.vendor?.phone}
-                                            fieldName="vendor.phone"
-                                            path="vendor.phone"
-                                            type="tel"
-                                            icon={<Info fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Email"
-                                            value={editedData.vendor?.email}
-                                            fieldName="vendor.email"
-                                            path="vendor.email"
-                                            type="email"
-                                            icon={<Info fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Address"
-                                            value={editedData.vendor?.address}
-                                            fieldName="vendor.address"
-                                            path="vendor.address"
-                                            multiline={true}
-                                            icon={<Info fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Tax ID / SST No"
-                                            value={editedData.vendor?.taxId}
-                                            fieldName="vendor.taxId"
-                                            path="vendor.taxId"
-                                            icon={<Info fontSize="small" />}
-                                        />
-                                    </List>
-                                </CardContent>
-                            </Card>
-
-                            {/* Line Items */}
-                            <Card variant="outlined" sx={{ mb: 2 }}>
-                                <CardContent sx={{ py: 1.5 }}>
-                                    <LineItemsTable />
-                                </CardContent>
-                            </Card>
-
-                            {/* Financial Details */}
-                            <Card variant="outlined" sx={{ mb: 2 }}>
-                                <CardContent sx={{ py: 1.5 }}>
-                                    <Typography variant="subtitle1" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold' }}>
-                                        <TrendingUp sx={{ mr: 1 }} />
-                                        Financial Details
-                                    </Typography>
-                                    <List dense>
-                                        <EditableFieldWithConfidence
-                                            label="Subtotal"
-                                            value={editedData.amounts?.subtotal}
-                                            fieldName="amounts.subtotal"
-                                            path="amounts.subtotal"
-                                            type="number"
-                                            icon={<TrendingUp fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Tax Amount"
-                                            value={editedData.amounts?.tax}
-                                            fieldName="amounts.tax"
-                                            path="amounts.tax"
-                                            type="number"
-                                            icon={<TrendingUp fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Tax Rate (%)"
-                                            value={editedData.amounts?.taxRate}
-                                            fieldName="amounts.taxRate"
-                                            path="amounts.taxRate"
-                                            icon={<Info fontSize="small" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Total Amount"
-                                            value={editedData.amounts?.total}
-                                            fieldName="amounts.total"
-                                            path="amounts.total"
-                                            type="number"
-                                            icon={<TrendingUp fontSize="small" color="primary" />}
-                                        />
-                                        <EditableFieldWithConfidence
-                                            label="Currency"
-                                            value={editedData.amounts?.currency}
-                                            fieldName="amounts.currency"
-                                            path="amounts.currency"
-                                            icon={<Info fontSize="small" />}
-                                        />
-                                    </List>
-
-                                    {/* IMPROVED: Financial Summary */}
-                                    {editedData.amounts?.total && (
-                                        <Box sx={{ mt: 2, p: 1.5, bgcolor: 'success.light', borderRadius: 1 }}>
-                                            <Typography variant="h6" color="success.contrastText" align="center">
-                                                Total: {formatCurrency(editedData.amounts.total, editedData.amounts?.currency)}
-                                            </Typography>
-                                        </Box>
-                                    )}
-                                </CardContent>
-                            </Card>
-
-                            {/* Processing Metrics */}
-                            <Card variant="outlined">
-                                <CardContent>
-                                    <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center' }}>
-                                        <Assignment sx={{ mr: 1 }} />
-                                        Processing Metrics
-                                    </Typography>
-                                    <Grid container spacing={2}>
-                                        <Grid item xs={6}>
-                                            <Typography variant="body2" color="text.secondary">
-                                                Processing Time
-                                            </Typography>
-                                            <Typography variant="h6">
-                                                {((invoiceDocument.metrics?.processingTime || 0) / 1000).toFixed(1)}s
-                                            </Typography>
-                                        </Grid>
-                                        <Grid item xs={6}>
-                                            <Typography variant="body2" color="text.secondary">
-                                                Data Quality
-                                            </Typography>
-                                            <Typography variant="h6">
-                                                {invoiceDocument.metrics?.dataExtractionScore?.toFixed(0) || 'N/A'}%
-                                            </Typography>
-                                        </Grid>
-                                        <Grid item xs={6}>
-                                            <Typography variant="body2" color="text.secondary">
-                                                Pages Processed
-                                            </Typography>
-                                            <Typography variant="h6">
-                                                {invoiceDocument.metrics?.pagesProcessed || 1}
-                                            </Typography>
-                                        </Grid>
-                                        <Grid item xs={6}>
-                                            <Typography variant="body2" color="text.secondary">
-                                                Consensus Score
-                                            </Typography>
-                                            <Typography variant="h6">
-                                                {invoiceDocument.metrics?.consensusScore?.toFixed(0) || 'N/A'}%
-                                            </Typography>
-                                        </Grid>
-                                    </Grid>
-
-                                    {invoiceDocument.extractionMethods && invoiceDocument.extractionMethods.length > 0 && (
-                                        <Box sx={{ mt: 2 }}>
-                                            <Typography variant="body2" color="text.secondary" gutterBottom>
-                                                Extraction Methods Used:
-                                            </Typography>
-                                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                                                {invoiceDocument.extractionMethods.map((method, index) => (
-                                                    <Chip
-                                                        key={index}
-                                                        label={method}
-                                                        size="small"
-                                                        variant="outlined"
-                                                        color={
-                                                            method.includes('OpenAI') ? 'primary' :
-                                                                method.includes('Claude') ? 'secondary' :
-                                                                    method.includes('Ollama') ? 'info' :
-                                                                        method.includes('enhanced_regex') ? 'success' : 'default'
-                                                        }
-                                                    />
-                                                ))}
-                                            </Box>
-                                        </Box>
-                                    )}
-                                </CardContent>
-                            </Card>
-                        </Paper>
-                    </Grid>
-
-                    {/* Right Panel - Document Viewer */}
-                    <Grid item xs={12} lg={7} md={6}>
-                        <Paper sx={{
-                            height: { md: 'calc(100vh - 250px)', xs: '600px' },
-                            display: 'flex',
-                            flexDirection: 'column'
+                {/* Right Panel - Document Viewer */}
+                <Box sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}>
+                    <Paper sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        <Box sx={{
+                            p: 2,
+                            borderBottom: 1,
+                            borderColor: 'divider',
+                            flexShrink: 0,
+                            bgcolor: 'grey.50'
                         }}>
-                            <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
-                                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
-                                    <Visibility sx={{ mr: 1 }} />
-                                    Original Document
-                                    {editMode && (
-                                        <Chip
-                                            label="Refer to PDF for corrections"
-                                            color="info"
-                                            size="small"
-                                            sx={{ ml: 2 }}
-                                        />
-                                    )}
-                                </Typography>
-                            </Box>
-
-                            <Box sx={{ flexGrow: 1, position: 'relative', overflow: 'hidden' }}>
-                                {invoiceDocument.originalName?.toLowerCase().endsWith('.pdf') ? (
-                                    <SimplePDFViewer
-                                        documentUrl={pdfUrl}
-                                        filename={invoiceDocument.originalName}
+                            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center' }}>
+                                <Visibility sx={{ mr: 1 }} />
+                                Original Document
+                                {editMode && (
+                                    <Chip
+                                        label="Refer to PDF for corrections"
+                                        color="info"
+                                        size="small"
+                                        sx={{ ml: 2 }}
                                     />
-                                ) : (
-                                    <Box
-                                        sx={{
-                                            height: '100%',
-                                            width: '100%',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            p: 2,
-                                            overflow: 'auto'
-                                        }}
-                                    >
-                                        <img
-                                            src={pdfUrl || `http://localhost:5000/uploads/${invoiceDocument.filename}`}
-                                            alt="Document"
-                                            style={{
-                                                maxWidth: '100%',
-                                                maxHeight: '100%',
-                                                objectFit: 'contain'
-                                            }}
-                                            onError={(e) => {
-                                                e.target.style.display = 'none';
-                                                setError('Failed to load document image');
-                                            }}
-                                        />
-                                    </Box>
                                 )}
-                            </Box>
-                        </Paper>
-                    </Grid>
-                </Grid>
+                            </Typography>
+                        </Box>
+
+                        <Box sx={{
+                            flex: 1,
+                            position: 'relative',
+                            overflow: 'hidden',
+                            bgcolor: 'grey.100'
+                        }}>
+                            {invoiceDocument.originalName?.toLowerCase().endsWith('.pdf') ? (
+                                <SimplePDFViewer
+                                    documentUrl={pdfUrl}
+                                    filename={invoiceDocument.originalName}
+                                />
+                            ) : (
+                                <Box
+                                    sx={{
+                                        height: '100%',
+                                        width: '100%',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        p: 2,
+                                        overflow: 'auto'
+                                    }}
+                                >
+                                    <img
+                                        src={pdfUrl || `http://localhost:5000/uploads/${invoiceDocument.filename}`}
+                                        alt="Document"
+                                        style={{
+                                            maxWidth: '100%',
+                                            maxHeight: '100%',
+                                            objectFit: 'contain',
+                                            border: '1px solid #ddd',
+                                            borderRadius: '4px',
+                                            backgroundColor: 'white'
+                                        }}
+                                        onError={(e) => {
+                                            e.target.style.display = 'none';
+                                            setError('Failed to load document image');
+                                        }}
+                                    />
+                                </Box>
+                            )}
+                        </Box>
+                    </Paper>
+                </Box>
             </Box>
 
             {/* Raw Data Dialog */}
@@ -1303,147 +1018,30 @@ const DocumentDetailView = () => {
                         <Button
                             size="small"
                             startIcon={<ContentCopy />}
-                            onClick={() => copyToClipboard(JSON.stringify({
-                                original: invoiceDocument.invoiceData,
-                                normalized: editedData,
-                                currentView: editMode ? editedData : invoiceDocument.invoiceData,
-                                hasChanges: hasChanges,
-                                metadata: {
-                                    documentId: invoiceDocument.id,
-                                    filename: invoiceDocument.originalName,
-                                    status: invoiceDocument.status,
-                                    extractionMethods: invoiceDocument.extractionMethods,
-                                    metrics: invoiceDocument.metrics
-                                }
-                            }, null, 2))}
+                            onClick={() => copyToClipboard(JSON.stringify(editMode ? editedData : invoiceDocument.invoiceData, null, 2))}
                         >
                             Copy All
                         </Button>
                     </Box>
                 </DialogTitle>
                 <DialogContent>
-                    <Accordion defaultExpanded>
-                        <AccordionSummary expandIcon={<ExpandMore />}>
-                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                                Current Data {editMode && hasChanges && "(Modified)"}
-                            </Typography>
-                        </AccordionSummary>
-                        <AccordionDetails>
-                            <Paper
-                                sx={{
-                                    p: 2,
-                                    bgcolor: editMode && hasChanges ? 'warning.light' : 'grey.50',
-                                    maxHeight: 400,
-                                    overflow: 'auto',
-                                    fontFamily: 'monospace',
-                                    fontSize: '0.75rem'
-                                }}
-                            >
-                                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                    {JSON.stringify(editMode ? editedData : editedData, null, 2)}
-                                </pre>
-                            </Paper>
-                        </AccordionDetails>
-                    </Accordion>
-
-                    {editMode && hasChanges && (
-                        <Accordion>
-                            <AccordionSummary expandIcon={<ExpandMore />}>
-                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                                    Original Extracted Data
-                                </Typography>
-                            </AccordionSummary>
-                            <AccordionDetails>
-                                <Paper
-                                    sx={{
-                                        p: 2,
-                                        bgcolor: 'grey.50',
-                                        maxHeight: 400,
-                                        overflow: 'auto',
-                                        fontFamily: 'monospace',
-                                        fontSize: '0.75rem'
-                                    }}
-                                >
-                                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                        {JSON.stringify(invoiceDocument.invoiceData, null, 2)}
-                                    </pre>
-                                </Paper>
-                            </AccordionDetails>
-                        </Accordion>
-                    )}
-
-                    <Accordion>
-                        <AccordionSummary expandIcon={<ExpandMore />}>
-                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                                Document Metadata
-                            </Typography>
-                        </AccordionSummary>
-                        <AccordionDetails>
-                            <Paper
-                                sx={{
-                                    p: 2,
-                                    bgcolor: 'info.light',
-                                    maxHeight: 400,
-                                    overflow: 'auto',
-                                    fontFamily: 'monospace',
-                                    fontSize: '0.75rem'
-                                }}
-                            >
-                                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                    {JSON.stringify({
-                                        documentId: invoiceDocument.id,
-                                        filename: invoiceDocument.originalName,
-                                        status: invoiceDocument.status,
-                                        createdAt: invoiceDocument.createdAt,
-                                        completedAt: invoiceDocument.completedAt,
-                                        extractionMethods: invoiceDocument.extractionMethods,
-                                        metrics: invoiceDocument.metrics,
-                                        editingStatus: {
-                                            isInEditMode: editMode,
-                                            hasUnsavedChanges: hasChanges
-                                        }
-                                    }, null, 2)}
-                                </pre>
-                            </Paper>
-                        </AccordionDetails>
-                    </Accordion>
-
-                    {invoiceDocument.extractedText && (
-                        <Accordion>
-                            <AccordionSummary expandIcon={<ExpandMore />}>
-                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                                    Raw Extracted Text (OCR Output)
-                                </Typography>
-                            </AccordionSummary>
-                            <AccordionDetails>
-                                <Paper
-                                    sx={{
-                                        p: 2,
-                                        bgcolor: 'grey.100',
-                                        maxHeight: 300,
-                                        overflow: 'auto',
-                                        fontFamily: 'monospace',
-                                        fontSize: '0.7rem'
-                                    }}
-                                >
-                                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                                        {invoiceDocument.extractedText}
-                                    </pre>
-                                </Paper>
-                            </AccordionDetails>
-                        </Accordion>
-                    )}
+                    <Paper
+                        sx={{
+                            p: 2,
+                            bgcolor: 'grey.50',
+                            maxHeight: 400,
+                            overflow: 'auto',
+                            fontFamily: 'monospace',
+                            fontSize: '0.75rem'
+                        }}
+                    >
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                            {JSON.stringify(editMode ? editedData : invoiceDocument.invoiceData, null, 2)}
+                        </pre>
+                    </Paper>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setShowRawData(false)}>
-                        Close
-                    </Button>
-                    <Button
-                        startIcon={<ContentCopy />}
-                        onClick={() => copyToClipboard(JSON.stringify(editMode ? editedData : editedData, null, 2))}
-                    >
-                        Copy Current Data
-                    </Button>
+                    <Button onClick={() => setShowRawData(false)}>Close</Button>
                 </DialogActions>
             </Dialog>
 
@@ -1462,30 +1060,9 @@ const DocumentDetailView = () => {
                     <Typography variant="body2" color="text.secondary">
                         This will update the extracted invoice data permanently.
                     </Typography>
-
-                    {/* Summary of changes */}
-                    <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
-                        <Typography variant="subtitle2" gutterBottom>
-                            Summary of Changes:
-                        </Typography>
-                        <Typography variant="body2">
-                            • Line Items: {editedData.lineItems?.length || 0} items
-                        </Typography>
-                        <Typography variant="body2">
-                            • Total Amount: {formatCurrency(editedData.amounts?.total, editedData.amounts?.currency)}
-                        </Typography>
-                        <Typography variant="body2">
-                            • Vendor: {editedData.vendor?.name || 'Not specified'}
-                        </Typography>
-                        <Typography variant="body2">
-                            • Invoice Number: {editedData.invoiceNumber || 'Not specified'}
-                        </Typography>
-                    </Box>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setSaveDialog(false)}>
-                        Cancel
-                    </Button>
+                    <Button onClick={() => setSaveDialog(false)}>Cancel</Button>
                     <Button
                         onClick={confirmSave}
                         variant="contained"

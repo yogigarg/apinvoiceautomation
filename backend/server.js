@@ -893,7 +893,7 @@ async function saveDocumentToDatabase(documentData, userId, companyId) {
 }
 
 // Async processing function using PURE PDF.js
-async function processDocumentAsyncPure(filePath, documentId, socketId, originalName) {
+async function processDocumentAsyncPure(filePath, documentId, socketId, originalName, userId = null, companyId = null) {
     try {
         console.log(`🚀 Starting PURE PDF.js processing for: ${originalName}`);
 
@@ -921,7 +921,9 @@ async function processDocumentAsyncPure(filePath, documentId, socketId, original
             extractedText: result.extractedText,
             invoiceData: result.invoiceData,
             metrics: result.metrics,
-            extractionMethods: result.extractionMethods
+            extractionMethods: result.extractionMethods,
+            userId: userId,      // ← ADD THIS
+            companyId: companyId // ← ADD THIS
         };
 
         console.log(`📊 Processing Summary for ${originalName}:`);
@@ -1360,6 +1362,8 @@ io.on('connection', (socket) => {
 
 // Health check with ML/LLM status
 app.get('/api/health', (req, res) => {
+    const googleAIStatus = enhancedProcessor ? enhancedProcessor.getStatus() : null;
+
     res.json({
         status: 'OK',
         timestamp: new Date().toISOString(),
@@ -1368,12 +1372,15 @@ app.get('/api/health', (req, res) => {
             'user_management',
             'document_processing',
             'enhanced_pdf_ocr',
-            'ml_llm_extraction'
+            googleAIStatus?.googleAI ? 'google_document_ai' : 'ocr_fallback'
         ],
-        ml_status: {
-            openai: !!LLM_CONFIG.openai.apiKey,
-            claude: !!LLM_CONFIG.claude.apiKey,
-            ollama: !!LLM_CONFIG.ollama.endpoint
+        google_document_ai: {
+            enabled: googleAIStatus?.googleAI || false,
+            initialized: googleAIStatus?.initializationAttempted || false,
+            error: googleAIStatus?.googleAIStatus?.error || null,
+            projectId: process.env.GOOGLE_CLOUD_PROJECT_ID ? 'configured' : 'missing',
+            processorId: process.env.GOOGLE_DOCUMENT_AI_PROCESSOR_ID ? 'configured' : 'missing',
+            credentials: process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'configured' : 'missing'
         }
     });
 });
@@ -1840,7 +1847,7 @@ app.post('/api/upload', authenticateToken, upload.single('document'), async (req
             mimetype: req.file.mimetype,
             status: 'processing',
             createdAt: new Date().toISOString(),
-            userId: req.user.id, // ← This is the key fix!
+            userId: req.user.id,
             companyId: req.user.company_id
         };
 
@@ -1859,25 +1866,33 @@ app.post('/api/upload', authenticateToken, upload.single('document'), async (req
             }
         });
 
-        // Process document asynchronously with user context
-        processDocumentAsyncWithUser(filePath, documentId, socketId, req.file.originalname, req.user.id, req.user.company_id)
-            .catch(error => {
-                console.error('Async processing failed:', error);
+        // 🔥 CRITICAL FIX: Use enhanced processing with Google Document AI
+        console.log('🤖 Starting enhanced processing with Google Document AI...');
 
-                const doc = documents.get(documentId);
-                if (doc) {
-                    doc.status = 'failed';
-                    doc.error = error.message;
-                    doc.completedAt = new Date().toISOString();
-                }
+        processDocumentAsyncWithUser(
+            filePath,
+            documentId,
+            socketId,
+            req.file.originalname,
+            req.user.id,
+            req.user.company_id
+        ).catch(error => {
+            console.error('Enhanced processing failed:', error);
 
-                if (socketId) {
-                    io.to(socketId).emit('processing_error', {
-                        documentId,
-                        error: error.message
-                    });
-                }
-            });
+            const doc = documents.get(documentId);
+            if (doc) {
+                doc.status = 'failed';
+                doc.error = error.message;
+                doc.completedAt = new Date().toISOString();
+            }
+
+            if (socketId) {
+                io.to(socketId).emit('processing_error', {
+                    documentId,
+                    error: error.message
+                });
+            }
+        });
 
     } catch (error) {
         console.error('❌ Upload error:', error);
@@ -2186,9 +2201,70 @@ app.delete('/api/documents/:documentId', authenticateToken, async (req, res) => 
     }
 });
 
-// Enhanced analytics endpoint that includes processing methods
+app.get('/api/analytics/dashboard', authenticateToken, async (req, res) => {
+    try {
+        console.log(`📊 Getting basic analytics for user ${req.user.id}`);
+
+        const userDocuments = Array.from(documents.values())
+            .filter(doc => doc.userId === req.user.id);
+
+        const totalDocuments = userDocuments.length;
+        const completedDocuments = userDocuments.filter(doc => doc.status === 'completed').length;
+        const processingDocuments = userDocuments.filter(doc => doc.status === 'processing').length;
+        const failedDocuments = userDocuments.filter(doc => doc.status === 'failed').length;
+
+        // Calculate average confidence for completed documents
+        const completedDocs = userDocuments.filter(doc => doc.status === 'completed' && doc.metrics);
+        const avgConfidence = completedDocs.length > 0
+            ? completedDocs.reduce((sum, doc) => sum + (doc.metrics?.averageConfidence || 0), 0) / completedDocs.length
+            : 0;
+
+        // Calculate average processing time
+        const avgProcessingTime = completedDocs.length > 0
+            ? completedDocs.reduce((sum, doc) => sum + (doc.metrics?.processingTime || 0), 0) / completedDocs.length / 1000
+            : 0;
+
+        // Get recent documents
+        const recentDocuments = userDocuments
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+            .slice(0, 5)
+            .map(doc => ({
+                id: doc.id,
+                originalName: doc.originalName,
+                status: doc.status,
+                createdAt: doc.createdAt,
+                vendor: doc.invoiceData?.vendor?.name || 'Unknown',
+                amount: doc.invoiceData?.amounts?.total || 0,
+                confidence: doc.metrics?.averageConfidence || 0
+            }));
+
+        const analytics = {
+            summary: {
+                totalDocuments,
+                completedDocuments,
+                processingDocuments,
+                failedDocuments,
+                averageConfidence: avgConfidence,
+                averageProcessingTime: avgProcessingTime
+            },
+            recentDocuments: recentDocuments
+        };
+
+        console.log(`📈 Analytics summary: ${totalDocuments} total, ${completedDocuments} completed, ${processingDocuments} processing`);
+
+        res.json(analytics);
+
+    } catch (error) {
+        console.error('Analytics error:', error);
+        res.status(500).json({ error: 'Failed to get analytics data' });
+    }
+});
+
+// 2. Enhanced analytics endpoint (keep existing one but fix it)
 app.get('/api/analytics/enhanced-dashboard', authenticateToken, async (req, res) => {
     try {
+        console.log(`📊 Getting enhanced analytics for user ${req.user.id}`);
+
         const userDocuments = Array.from(documents.values())
             .filter(doc => doc.userId === req.user.id);
 
@@ -2202,17 +2278,20 @@ app.get('/api/analytics/enhanced-dashboard', authenticateToken, async (req, res)
         // Method usage statistics
         const methodStats = {};
         completedDocs.forEach(doc => {
-            const method = doc.metrics?.method || 'Unknown';
+            const method = doc.metrics?.method || doc.extractionMethods?.[0] || 'Unknown';
             methodStats[method] = (methodStats[method] || 0) + 1;
         });
 
         const avgConfidence = completedDocs.length > 0
-            ? completedDocs.reduce((sum, doc) => sum + (doc.metrics?.confidence || 0), 0) / completedDocs.length
+            ? completedDocs.reduce((sum, doc) => sum + (doc.metrics?.confidence || doc.metrics?.averageConfidence || 0), 0) / completedDocs.length
             : 0;
 
         const avgProcessingTime = completedDocs.length > 0
             ? completedDocs.reduce((sum, doc) => sum + (doc.metrics?.processingTime || 0), 0) / completedDocs.length / 1000
             : 0;
+
+        // Check if Google AI is enabled
+        const googleAIEnabled = enhancedProcessor ? enhancedProcessor.getStatus().googleAI : false;
 
         res.json({
             summary: {
@@ -2223,7 +2302,7 @@ app.get('/api/analytics/enhanced-dashboard', authenticateToken, async (req, res)
                 averageConfidence: avgConfidence,
                 averageProcessingTime: avgProcessingTime,
                 methodUsage: methodStats,
-                googleAIEnabled: enhancedProcessor.useGoogleAI
+                googleAIEnabled: googleAIEnabled
             },
             recentDocuments: userDocuments
                 .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -2233,8 +2312,8 @@ app.get('/api/analytics/enhanced-dashboard', authenticateToken, async (req, res)
                     originalName: doc.originalName,
                     status: doc.status,
                     createdAt: doc.createdAt,
-                    method: doc.metrics?.method || 'Unknown',
-                    confidence: doc.metrics?.confidence || 0,
+                    method: doc.metrics?.method || doc.extractionMethods?.[0] || 'Unknown',
+                    confidence: doc.metrics?.confidence || doc.metrics?.averageConfidence || 0,
                     vendor: doc.invoiceData?.vendor?.name || 'Unknown',
                     amount: doc.invoiceData?.amounts?.total || 0
                 }))
@@ -2244,6 +2323,7 @@ app.get('/api/analytics/enhanced-dashboard', authenticateToken, async (req, res)
         res.status(500).json({ error: 'Failed to get enhanced analytics data' });
     }
 });
+
 
 // Test ML extraction endpoint
 app.post('/api/test-extraction', authenticateToken, async (req, res) => {
