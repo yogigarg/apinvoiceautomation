@@ -930,7 +930,7 @@ async function processDocumentAsyncPure(filePath, documentId, socketId, original
         console.log(`   ✅ Invoice #: ${documentRecord.invoiceData?.invoiceNumber || 'Not found'}`);
         console.log(`   🏢 Vendor: ${documentRecord.invoiceData?.vendor?.name || 'Not found'}`);
         console.log(`   💰 Total: ${documentRecord.invoiceData?.amounts?.currency || ''}${documentRecord.invoiceData?.amounts?.total || 'Not found'}`);
-        console.log(`   📦 Line Items: ${documentRecord.invoiceData?.items?.length || 0}`);
+        console.log(`   📦 Line Items: ${documentRecord.invoiceData?.line_item?.length || 0}`);
         console.log(`   ⏱️ Processing Time: ${(documentRecord.metrics?.processingTime / 1000).toFixed(1)}s`);
         console.log(`   📈 Data Score: ${documentRecord.metrics?.dataExtractionScore || 0}%`);
 
@@ -1077,7 +1077,7 @@ async function processDocumentAsyncWithUser(filePath, documentId, socketId, orig
 
         const document = documents.get(documentId);
         if (!document) {
-            throw new Error('Document not found in memory');
+            throw new Error('Document not found in memory 12');
         }
 
         // Send initial processing update
@@ -1124,13 +1124,13 @@ async function processDocumentAsyncWithUser(filePath, documentId, socketId, orig
         document.extractionMethods = result.extractionMethods;
         document.pageCount = result.metrics?.pagesProcessed || 1;
 
-        console.log(`📊 Enhanced Processing Summary for ${originalName}:`);
+        console.log(`📊 Enhanced Processing Summary for 12 ${originalName}:`);
         console.log(`   ✅ Method: ${result.metrics?.method || 'Unknown'}`);
         console.log(`   📊 Confidence: ${result.metrics?.confidence?.toFixed(1) || result.metrics?.averageConfidence?.toFixed(1) || 0}%`);
         console.log(`   📄 Invoice #: ${document.invoiceData?.invoiceNumber || 'Not found'}`);
         console.log(`   🏢 Vendor: ${document.invoiceData?.vendor?.name || 'Not found'}`);
         console.log(`   💰 Total: ${document.invoiceData?.amounts?.currency || ''}${document.invoiceData?.amounts?.total || 'Not found'}`);
-        console.log(`   📦 Line Items: ${document.invoiceData?.items?.length || 0}`);
+        console.log(`   📦 Line Items: ${document.invoiceData?.line_items?.length || 0}`);
         console.log(`   ⏱️ Processing Time: ${(document.metrics?.processingTime / 1000).toFixed(1)}s`);
 
         // Send completion notification

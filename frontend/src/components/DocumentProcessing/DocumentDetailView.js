@@ -1,5 +1,4 @@
-// Complete DocumentDetailView.js with responsive layout and visible content - FIXED JSX ERRORS
-
+// Complete DocumentDetailView.js with fixed line items handling for 8-field structure
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
@@ -143,23 +142,20 @@ const DocumentDetailView = () => {
         }
     });
 
-    // Initialize edited data when document loads
-    useEffect(() => {
-        if (invoiceDocument?.invoiceData) {
-            const data = normalizeInvoiceData(invoiceDocument.invoiceData);
-            setEditedData(data);
-        }
-    }, [invoiceDocument]);
+    // Enhanced getItemDescription for the new structure
+    const getItemDescription = (item) => {
+        if (item.description) return item.description;
+        if (item.name) return item.name;
+        if (item.itemDescription) return item.itemDescription;
+        if (item.service) return item.service;
+        if (item.product) return item.product;
+        return 'Unknown Item';
+    };
 
-    // Set PDF URL when document is loaded
-    useEffect(() => {
-        if (invoiceDocument && invoiceDocument.filename) {
-            setPdfUrl(`http://localhost:5000/uploads/${invoiceDocument.filename}`);
-        }
-    }, [invoiceDocument]);
-
-    // Data normalization function
+    // Enhanced Data normalization function
     const normalizeInvoiceData = (data) => {
+        console.log('🔧 Normalizing invoice data:', data);
+
         const normalized = { ...data };
 
         // Ensure all required nested objects exist
@@ -169,20 +165,56 @@ const DocumentDetailView = () => {
         if (!normalized.paymentDetails) normalized.paymentDetails = {};
         if (!normalized.orderInfo) normalized.orderInfo = {};
 
-        // Handle line items
-        if (!normalized.lineItems || normalized.lineItems.length === 0) {
-            if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-                normalized.lineItems = data.items.map((item, index) => ({
+        // CRITICAL FIX: Handle line items from the new 8-field structure
+        let lineItems = [];
+
+        // Method 1: Check for direct items array (from Google Document AI)
+        if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+            console.log('📦 Found items array with', data.items.length, 'items');
+            lineItems = data.items.map((item, index) => {
+                console.log(`📦 Processing item ${index + 1}:`, item);
+
+                return {
                     id: item.id || `item-${index}`,
+                    itemNumber: item.itemNumber || null,
                     description: getItemDescription(item),
-                    quantity: parseFloat(item.quantity || item.qty || 1),
+                    customerPartNo: item.customerPartNo || null,
+                    unitQtyOrdered: parseFloat(item.unitQtyOrdered || item.quantity || item.qty || 1),
+                    qtyShipped: parseFloat(item.qtyShipped || item.quantity || item.qty || 1),
                     unitPrice: parseFloat(item.unitPrice || item.price || item.rate || 0),
-                    amount: parseFloat(item.amount || item.total || (item.quantity * item.unitPrice) || 0)
-                }));
-            } else {
-                normalized.lineItems = [];
-            }
+                    netPrice: parseFloat(item.netPrice || item.unitPrice || item.price || 0),
+                    lineTotal: parseFloat(item.lineTotal || item.amount || item.total || 0)
+                };
+            });
         }
+
+        // Method 2: Check for existing lineItems array
+        else if (data.lineItems && Array.isArray(data.lineItems) && data.lineItems.length > 0) {
+            console.log('📦 Found lineItems array with', data.lineItems.length, 'items');
+            lineItems = data.lineItems.map((item, index) => ({
+                id: item.id || `item-${index}`,
+                itemNumber: item.itemNumber || null,
+                description: getItemDescription(item),
+                customerPartNo: item.customerPartNo || null,
+                unitQtyOrdered: parseFloat(item.unitQtyOrdered || item.quantity || item.qty || 1),
+                qtyShipped: parseFloat(item.qtyShipped || item.quantity || item.qty || 1),
+                unitPrice: parseFloat(item.unitPrice || item.price || item.rate || 0),
+                netPrice: parseFloat(item.netPrice || item.unitPrice || item.price || 0),
+                lineTotal: parseFloat(item.lineTotal || item.amount || item.total || 0)
+            }));
+        }
+
+        // Method 3: No line items found
+        else {
+            console.log('⚠️ No line items found in data');
+            lineItems = [];
+        }
+
+        // Set both lineItems and items for compatibility
+        normalized.lineItems = lineItems;
+        normalized.items = lineItems;
+
+        console.log('✅ Normalized line items:', normalized.lineItems);
 
         // Vendor name normalization
         if (!normalized.vendor.name) {
@@ -194,17 +226,27 @@ const DocumentDetailView = () => {
             normalized.amounts.currency = detectCurrency(data);
         }
 
-        normalized.items = normalized.lineItems;
         return normalized;
     };
 
-    // Helper functions
-    const getItemDescription = (item) => {
-        if (item.description) return item.description;
-        if (item.name) return item.name;
-        return 'Unknown Item';
-    };
+    // Initialize edited data when document loads
+    useEffect(() => {
+        if (invoiceDocument?.invoiceData) {
+            console.log('🔍 Raw invoice data received:', invoiceDocument.invoiceData);
+            const data = normalizeInvoiceData(invoiceDocument.invoiceData);
+            console.log('🔧 Normalized data:', data);
+            setEditedData(data);
+        }
+    }, [invoiceDocument]);
 
+    // Set PDF URL when document is loaded
+    useEffect(() => {
+        if (invoiceDocument && invoiceDocument.filename) {
+            setPdfUrl(`http://localhost:5000/uploads/${invoiceDocument.filename}`);
+        }
+    }, [invoiceDocument]);
+
+    // Helper functions
     const getVendorName = (invoiceData) => {
         const vendorNameFields = ['vendor.name', 'vendorName', 'supplier', 'from', 'company'];
         for (const field of vendorNameFields) {
@@ -219,7 +261,7 @@ const DocumentDetailView = () => {
     const detectCurrency = (invoiceData) => {
         if (invoiceData.amounts?.currency) return invoiceData.amounts.currency;
         if (invoiceData.currency) return invoiceData.currency;
-        return 'MYR';
+        return 'USD';
     };
 
     const getNestedValue = (obj, path) => {
@@ -263,7 +305,7 @@ const DocumentDetailView = () => {
         }
     };
 
-    const formatCurrency = (amount, currency = 'MYR') => {
+    const formatCurrency = (amount, currency = 'USD') => {
         if (!amount && amount !== 0) return 'N/A';
         const currencyMap = {
             'USD': '$',
@@ -377,6 +419,10 @@ const DocumentDetailView = () => {
         URL.revokeObjectURL(url);
     };
 
+    // Debug logging in render
+    console.log('🎯 Current editedData in render:', editedData);
+    console.log('📦 Line items to display:', editedData.lineItems || editedData.items || []);
+
     if (isLoading) {
         return (
             <Box display="flex" justifyContent="center" alignItems="center" minHeight="80vh">
@@ -454,6 +500,199 @@ const DocumentDetailView = () => {
                     >
                         {fieldValue || 'Not found'}
                     </Typography>
+                )}
+            </Box>
+        );
+    };
+
+    // Enhanced Line Items Component with new 8-field structure
+    const LineItemsSection = () => {
+        const lineItems = editedData.lineItems || editedData.items || [];
+        const currency = editedData.amounts?.currency || 'USD';
+
+        console.log('🔍 LineItemsSection - items to display:', lineItems);
+
+        return (
+            <Box sx={{ mb: 4 }}>
+                <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold', mb: 2 }}>
+                    <ShoppingCart sx={{ mr: 1 }} />
+                    Line Items
+                    <Chip
+                        label={`${lineItems.length} items`}
+                        size="small"
+                        color="primary"
+                        variant="outlined"
+                        sx={{ ml: 1 }}
+                    />
+                </Typography>
+
+                {lineItems.length > 0 ? (
+                    <Box>
+                        {lineItems.map((item, index) => (
+                            <Card key={item.id || index} variant="outlined" sx={{ mb: 2 }}>
+                                <CardContent sx={{ py: 2 }}>
+                                    <Grid container spacing={2}>
+                                        <Grid item xs={12}>
+                                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                                                <Typography variant="subtitle2" color="text.secondary">
+                                                    Item {index + 1}
+                                                    {item.itemNumber && (
+                                                        <Chip
+                                                            label={`#${item.itemNumber}`}
+                                                            size="small"
+                                                            variant="outlined"
+                                                            sx={{ ml: 1 }}
+                                                        />
+                                                    )}
+                                                </Typography>
+                                                {item.customerPartNo && (
+                                                    <Typography variant="caption" color="text.secondary">
+                                                        Customer Part: {item.customerPartNo}
+                                                    </Typography>
+                                                )}
+                                            </Box>
+                                            <Typography variant="body1" sx={{ fontWeight: 'bold', mb: 2 }}>
+                                                {item.description || 'No description'}
+                                            </Typography>
+                                        </Grid>
+
+                                        {/* Quantities Row */}
+                                        <Grid item xs={3}>
+                                            <Typography variant="caption" color="text.secondary">
+                                                Qty Ordered
+                                            </Typography>
+                                            <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                                                {item.unitQtyOrdered || 0}
+                                            </Typography>
+                                        </Grid>
+                                        <Grid item xs={3}>
+                                            <Typography variant="caption" color="text.secondary">
+                                                Qty Shipped
+                                            </Typography>
+                                            <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                                                {item.qtyShipped || 0}
+                                            </Typography>
+                                        </Grid>
+
+                                        {/* Prices Row */}
+                                        <Grid item xs={3}>
+                                            <Typography variant="caption" color="text.secondary">
+                                                Unit Price
+                                            </Typography>
+                                            <Typography variant="body2">
+                                                {formatCurrency(item.unitPrice || 0, currency)}
+                                            </Typography>
+                                        </Grid>
+                                        <Grid item xs={3}>
+                                            <Typography variant="caption" color="text.secondary">
+                                                Net Price
+                                            </Typography>
+                                            <Typography variant="body2">
+                                                {formatCurrency(item.netPrice || item.unitPrice || 0, currency)}
+                                            </Typography>
+                                        </Grid>
+
+                                        {/* Total Row */}
+                                        <Grid item xs={12}>
+                                            <Box sx={{
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                mt: 1,
+                                                pt: 1,
+                                                borderTop: 1,
+                                                borderColor: 'divider'
+                                            }}>
+                                                <Typography variant="subtitle2" color="text.secondary">
+                                                    Line Total
+                                                </Typography>
+                                                <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold' }}>
+                                                    {formatCurrency(item.lineTotal || item.amount || 0, currency)}
+                                                </Typography>
+                                            </Box>
+                                        </Grid>
+                                    </Grid>
+                                </CardContent>
+                            </Card>
+                        ))}
+
+                        {/* Summary Card */}
+                        <Card variant="outlined" sx={{ bgcolor: 'primary.light', color: 'primary.contrastText' }}>
+                            <CardContent>
+                                <Grid container spacing={2}>
+                                    <Grid item xs={4}>
+                                        <Typography variant="caption">
+                                            Total Items
+                                        </Typography>
+                                        <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                                            {lineItems.length}
+                                        </Typography>
+                                    </Grid>
+                                    <Grid item xs={4}>
+                                        <Typography variant="caption">
+                                            Total Quantity
+                                        </Typography>
+                                        <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                                            {lineItems.reduce((sum, item) => sum + (parseFloat(item.qtyShipped || item.unitQtyOrdered || 0)), 0)}
+                                        </Typography>
+                                    </Grid>
+                                    <Grid item xs={4}>
+                                        <Typography variant="caption">
+                                            Items Total
+                                        </Typography>
+                                        <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                                            {formatCurrency(
+                                                lineItems.reduce((sum, item) => sum + (parseFloat(item.lineTotal || item.amount || 0)), 0),
+                                                currency
+                                            )}
+                                        </Typography>
+                                    </Grid>
+                                </Grid>
+                            </CardContent>
+                        </Card>
+                    </Box>
+                ) : (
+                    <Box sx={{ textAlign: 'center', py: 4, bgcolor: 'grey.50', borderRadius: 2 }}>
+                        <ShoppingCart sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
+                        <Typography variant="h6" sx={{ mb: 1 }}>
+                            No line items found
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                            This could be a service invoice or the extraction may need improvement
+                        </Typography>
+
+                        {/* Debug Information */}
+                        <Accordion sx={{ mt: 2, textAlign: 'left' }}>
+                            <AccordionSummary expandIcon={<ExpandMore />}>
+                                <Typography variant="caption" sx={{ fontWeight: 'bold' }}>
+                                    Debug Info - Click to expand
+                                </Typography>
+                            </AccordionSummary>
+                            <AccordionDetails>
+                                <Typography variant="caption" sx={{ display: 'block', mb: 1 }}>
+                                    Available fields: {Object.keys(editedData).join(', ')}
+                                </Typography>
+                                {editedData.items && (
+                                    <Typography variant="caption" sx={{ display: 'block', color: 'primary.main', mb: 1 }}>
+                                        Found 'items' field with {Array.isArray(editedData.items) ? editedData.items.length : 'non-array'} entries
+                                    </Typography>
+                                )}
+                                {editedData.lineItems && (
+                                    <Typography variant="caption" sx={{ display: 'block', color: 'secondary.main', mb: 1 }}>
+                                        Found 'lineItems' field with {Array.isArray(editedData.lineItems) ? editedData.lineItems.length : 'non-array'} entries
+                                    </Typography>
+                                )}
+                                <Box sx={{ maxHeight: 100, overflow: 'auto', bgcolor: 'grey.100', p: 1, borderRadius: 1, mt: 1 }}>
+                                    <pre style={{ margin: 0, fontSize: '10px' }}>
+                                        {JSON.stringify({
+                                            items: editedData.items,
+                                            lineItems: editedData.lineItems
+                                        }, null, 2)}
+                                    </pre>
+                                </Box>
+                            </AccordionDetails>
+                        </Accordion>
+                    </Box>
                 )}
             </Box>
         );
@@ -789,75 +1028,8 @@ const DocumentDetailView = () => {
                             )}
                         </Box>
 
-                        {/* Line Items Section */}
-                        <Box sx={{ mb: 4 }}>
-                            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', fontWeight: 'bold', mb: 2 }}>
-                                <ShoppingCart sx={{ mr: 1 }} />
-                                Line Items
-                                <Chip
-                                    label={`${editedData.lineItems?.length || 0} items`}
-                                    size="small"
-                                    color="primary"
-                                    variant="outlined"
-                                    sx={{ ml: 1 }}
-                                />
-                            </Typography>
-
-                            {editedData.lineItems && editedData.lineItems.length > 0 ? (
-                                <Box>
-                                    {editedData.lineItems.map((item, index) => (
-                                        <Card key={index} variant="outlined" sx={{ mb: 2 }}>
-                                            <CardContent sx={{ py: 2 }}>
-                                                <Grid container spacing={2}>
-                                                    <Grid item xs={12}>
-                                                        <Typography variant="subtitle2" color="text.secondary">
-                                                            Item {index + 1}
-                                                        </Typography>
-                                                        <Typography variant="body1" sx={{ fontWeight: 'bold' }}>
-                                                            {item.description || 'No description'}
-                                                        </Typography>
-                                                    </Grid>
-                                                    <Grid item xs={4}>
-                                                        <Typography variant="caption" color="text.secondary">
-                                                            Quantity
-                                                        </Typography>
-                                                        <Typography variant="body2">
-                                                            {item.quantity || 1}
-                                                        </Typography>
-                                                    </Grid>
-                                                    <Grid item xs={4}>
-                                                        <Typography variant="caption" color="text.secondary">
-                                                            Unit Price
-                                                        </Typography>
-                                                        <Typography variant="body2">
-                                                            {formatCurrency(item.unitPrice, editedData.amounts?.currency)}
-                                                        </Typography>
-                                                    </Grid>
-                                                    <Grid item xs={4}>
-                                                        <Typography variant="caption" color="text.secondary">
-                                                            Amount
-                                                        </Typography>
-                                                        <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                                                            {formatCurrency(item.amount, editedData.amounts?.currency)}
-                                                        </Typography>
-                                                    </Grid>
-                                                </Grid>
-                                            </CardContent>
-                                        </Card>
-                                    ))}
-                                </Box>
-                            ) : (
-                                <Box sx={{ textAlign: 'center', py: 4, bgcolor: 'grey.50', borderRadius: 2 }}>
-                                    <ShoppingCart sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
-                                    <Typography variant="h6" sx={{ mb: 1 }}>
-                                        No line items found
-                                    </Typography>
-                                    <Typography variant="body2" color="text.secondary">
-                                        This could be a service invoice or the extraction may need improvement
-                                    </Typography>
-                                </Box>
-                            )}
-                        </Box>
+                        {/* Line Items Section - Using the enhanced component */}
+                        <LineItemsSection />
 
                         {/* Processing Metrics */}
                         <Box>
